@@ -378,4 +378,36 @@ describe('PointService 통합 테스트', () => {
       expect(currentPoint.point).toBe(100);
     });
   });
+
+  describe('동시성 제어 테스트', () => {
+    it('동시 충전 요청이 정상적으로 처리되어야 한다', async () => {
+      const requestPromise = [
+        service.chargePoint(1, 1000),
+        service.chargePoint(1, 500),
+        service.chargePoint(1, 300),
+      ];
+
+      await Promise.all(requestPromise);
+
+      const result = await service.getUserPoint(1);
+
+      expect(result.point).toBe(1800);
+    });
+
+    it('동시 사용 요청이 정상적으로 처리되어야 한다', async () => {
+      await service.chargePoint(1, 10000);
+
+      const requestPromise = [
+        service.usePoint(1, 1000),
+        service.usePoint(1, 500),
+        service.usePoint(1, 300),
+      ];
+
+      await Promise.all(requestPromise);
+
+      const result = await service.getUserPoint(1);
+
+      expect(result.point).toBe(8200);
+    });
+  });
 });
