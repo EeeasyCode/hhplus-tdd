@@ -11,12 +11,18 @@ export class PointService {
     private readonly pointHistoryTable: PointHistoryTable,
   ) {}
 
+  /**
+   * 특정 유저의 포인트를 조회하는 기능
+   */
   async getUserPoint(userId: number): Promise<UserPoint> {
     const userPoint = await this.userPointTable.selectById(userId);
 
     return userPoint;
   }
 
+  /**
+   * 특정 유저의 포인트를 충전하는 기능
+   */
   async chargePoint(userId: number, amount: number): Promise<UserPoint> {
     if (amount <= 0) {
       throw new BadRequestException('충전 금액은 0보다 커야 합니다.');
@@ -41,6 +47,9 @@ export class PointService {
     };
   }
 
+  /**
+   * 특정 유저의 포인트를 사용하는 기능
+   */
   async usePoint(userId: number, amount: number): Promise<UserPoint> {
     if (amount <= 0) {
       throw new BadRequestException('사용 금액은 0보다 커야 합니다.');
@@ -70,6 +79,9 @@ export class PointService {
     };
   }
 
+  /**
+   * 특정 유저의 포인트 충전/이용 내역을 조회하는 기능
+   */
   async getPointHistories(userId: number): Promise<PointHistory[]> {
     const histories = await this.pointHistoryTable.selectAllByUserId(userId);
 
