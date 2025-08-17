@@ -1,4 +1,11 @@
-import { instance, mock, reset, when } from '@johanblumenberg/ts-mockito';
+import {
+  anyNumber,
+  instance,
+  mock,
+  reset,
+  verify,
+  when,
+} from '@johanblumenberg/ts-mockito';
 import { BadRequestException } from '@nestjs/common';
 import { PointHistoryTable } from 'src/database/pointhistory.table';
 import { UserPointTable } from 'src/database/userpoint.table';
@@ -101,7 +108,14 @@ describe('PointService', () => {
 
       await pointService.chargePoint(1, 5000);
 
-      // 히스토리 테이블의 insert 메서드가 호출되었는지 검증할 예정
+      verify(
+        mockPointHistoryTable.insert(
+          1,
+          5000,
+          TransactionType.CHARGE,
+          anyNumber(),
+        ),
+      ).once();
     });
   });
 
@@ -156,7 +170,9 @@ describe('PointService', () => {
 
       await pointService.usePoint(1, 5000);
 
-      // 히스토리 테이블의 insert 메서드가 호출되었는지 검증할 예정
+      verify(
+        mockPointHistoryTable.insert(1, 5000, TransactionType.USE, anyNumber()),
+      ).once();
     });
   });
 
