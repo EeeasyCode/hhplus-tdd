@@ -1,5 +1,6 @@
 // point.service.ts - 먼저 인터페이스 정의
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { MemoryLockManager } from 'src/utils/memory-lock.manager';
 import { PointHistoryTable } from '../database/pointhistory.table';
 import { UserPointTable } from '../database/userpoint.table';
 import { PointHistory, TransactionType, UserPoint } from './point.model';
@@ -9,6 +10,7 @@ export class PointService {
   constructor(
     private readonly userPointTable: UserPointTable,
     private readonly pointHistoryTable: PointHistoryTable,
+    private readonly memoryLockManager: MemoryLockManager,
   ) {}
 
   /**
@@ -24,59 +26,63 @@ export class PointService {
    * 특정 유저의 포인트를 충전하는 기능
    */
   async chargePoint(userId: number, amount: number): Promise<UserPoint> {
-    if (amount <= 0) {
-      throw new BadRequestException('충전 금액은 0보다 커야 합니다.');
-    }
+    return this.memoryLockManager.withLock(`user:${userId}`, async () => {
+      if (amount <= 0) {
+        throw new BadRequestException('충전 금액은 0보다 커야 합니다.');
+      }
 
-    const userPoint = await this.userPointTable.selectById(userId);
-    const chargedPoint = userPoint.point + amount;
-    const updateTime = Date.now();
+      const userPoint = await this.userPointTable.selectById(userId);
+      const chargedPoint = userPoint.point + amount;
+      const updateTime = Date.now();
 
-    await this.userPointTable.insertOrUpdate(userId, chargedPoint);
-    await this.pointHistoryTable.insert(
-      userId,
-      amount,
-      TransactionType.CHARGE,
-      updateTime,
-    );
+      await this.userPointTable.insertOrUpdate(userId, chargedPoint);
+      await this.pointHistoryTable.insert(
+        userId,
+        amount,
+        TransactionType.CHARGE,
+        updateTime,
+      );
 
-    return {
-      id: userId,
-      point: chargedPoint,
-      updateMillis: updateTime,
-    };
+      return {
+        id: userId,
+        point: chargedPoint,
+        updateMillis: updateTime,
+      };
+    });
   }
 
   /**
    * 특정 유저의 포인트를 사용하는 기능
    */
   async usePoint(userId: number, amount: number): Promise<UserPoint> {
-    if (amount <= 0) {
-      throw new BadRequestException('사용 금액은 0보다 커야 합니다.');
-    }
+    return this.memoryLockManager.withLock(`user:${userId}`, async () => {
+      if (amount <= 0) {
+        throw new BadRequestException('사용 금액은 0보다 커야 합니다.');
+      }
 
-    const userPoint = await this.userPointTable.selectById(userId);
+      const userPoint = await this.userPointTable.selectById(userId);
 
-    if (userPoint.point < amount) {
-      throw new BadRequestException('포인트가 부족합니다.');
-    }
+      if (userPoint.point < amount) {
+        throw new BadRequestException('포인트가 부족합니다.');
+      }
 
-    const usedPoint = userPoint.point - amount;
-    const updateTime = Date.now();
+      const usedPoint = userPoint.point - amount;
+      const updateTime = Date.now();
 
-    await this.userPointTable.insertOrUpdate(userId, usedPoint);
-    await this.pointHistoryTable.insert(
-      userId,
-      amount,
-      TransactionType.USE,
-      updateTime,
-    );
+      await this.userPointTable.insertOrUpdate(userId, usedPoint);
+      await this.pointHistoryTable.insert(
+        userId,
+        amount,
+        TransactionType.USE,
+        updateTime,
+      );
 
-    return {
-      id: userId,
-      point: usedPoint,
-      updateMillis: updateTime,
-    };
+      return {
+        id: userId,
+        point: usedPoint,
+        updateMillis: updateTime,
+      };
+    });
   }
 
   /**

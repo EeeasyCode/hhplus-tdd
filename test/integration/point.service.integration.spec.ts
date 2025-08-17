@@ -4,19 +4,34 @@ import { PointHistoryTable } from 'src/database/pointhistory.table';
 import { UserPointTable } from 'src/database/userpoint.table';
 import { TransactionType } from 'src/point/point.model';
 import { PointService } from 'src/point/point.service';
+import { MemoryLockManager } from 'src/utils/memory-lock.manager';
 
 describe('PointService 통합 테스트', () => {
   let service: PointService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
-      providers: [PointService, UserPointTable, PointHistoryTable],
+      providers: [
+        PointService,
+        UserPointTable,
+        PointHistoryTable,
+        MemoryLockManager,
+      ],
     }).compile();
 
     service = module.get<PointService>(PointService);
   });
 
   describe('getUserPoint', () => {
+    /**
+     * 테스트 목적: 신규 사용자 처리 로직의 전체 플로우 검증
+     * 테스트 시나리오: 처음 가입한 사용자의 포인트 조회
+     * 검증 내용:
+     * - 데이터베이스에 기록이 없는 사용자도 정상 처리
+     * - 기본값 0 포인트 반환
+     * - 시스템 안정성 (예외 발생하지 않음)
+     * 통합 테스트 의미: 실제 데이터베이스 연동까지 포함한 완전한 플로우 검증
+     */
     it('신규 사용자의 경우 0 포인트를 반환해야 한다', async () => {
       // given
       const userId = 1;
@@ -30,6 +45,15 @@ describe('PointService 통합 테스트', () => {
       expect(result.updateMillis).toBeDefined();
     });
 
+    /**
+     * 테스트 목적: 충전 후 조회의 데이터 일관성 검증
+     * 테스트 시나리오: 포인트 충전 → 즉시 조회하여 반영 확인
+     * 검증 내용:
+     * - 충전 작업과 조회 작업 간의 데이터 일관성
+     * - 실제 데이터베이스에 정확히 저장되었는지 확인
+     * - 서비스 메서드 간 연동 검증
+     * 통합 테스트 중요성: 실제 운영 환경에서의 동작 시뮬레이션
+     */
     it('포인트를 충전한 후 조회하면 충전된 포인트가 반환되어야 한다', async () => {
       // given
       const userId = 1;
@@ -46,6 +70,16 @@ describe('PointService 통합 테스트', () => {
   });
 
   describe('chargePoint', () => {
+    /**
+     * 테스트 목적: 포인트 충전의 전체 비즈니스 플로우 검증
+     * 테스트 시나리오: 기존 포인트 + 새로운 충전 = 누적된 최종 포인트
+     * 검증 내용:
+     * - 두 번의 연속 충전이 정확히 누적되는지 확인
+     * - 각 충전 시점의 포인트 상태 검증
+     * - 데이터베이스 업데이트의 정확성 확인
+     * - 실제 조회를 통한 최종 검증
+     * 통합 테스트 의미: 실제 서비스 사용 패턴과 동일한 시나리오 검증
+     */
     it('유효한 금액으로 포인트를 충전해야 한다', async () => {
       // given
       const userId = 1;
@@ -71,6 +105,16 @@ describe('PointService 통합 테스트', () => {
       expect(finalPoint.point).toBe(firstCharge + secondCharge);
     });
 
+    /**
+     * 테스트 목적: 포인트 충전 시 히스토리 기록의 정확성 검증
+     * 테스트 시나리오: 충전 → 히스토리 조회하여 기록 확인
+     * 검증 내용:
+     * - 히스토리 테이블에 정확한 데이터 저장 확인
+     * - 트랜잭션 타입(CHARGE) 정확성
+     * - 사용자 ID, 금액 정보의 정확성
+     * - 감사 추적(Audit Trail) 기능 검증
+     * 통합 테스트 중요성: 실제 데이터베이스 트랜잭션까지 포함한 완전한 검증
+     */
     it('충전 내역이 포인트 히스토리에 기록되어야 한다', async () => {
       // given
       const userId = 1;
@@ -330,6 +374,16 @@ describe('PointService 통합 테스트', () => {
       expect(histories).toHaveLength(3);
     });
 
+    /**
+     * 테스트 목적: 다중 사용자 환경에서의 독립성 검증
+     * 테스트 시나리오: 서로 다른 2명의 사용자가 동시에 포인트 거래
+     * 검증 내용:
+     * - 사용자별 독립적인 락 동작 확인
+     * - 사용자A와 사용자B의 트랜잭션이 서로 영향 주지 않음
+     * - 병렬 처리를 통한 성능 최적화 확인
+     * - 각 사용자별 정확한 잔액 및 히스토리 관리
+     * 확장성 관점: 실제 다중 사용자 서비스 환경 시뮬레이션
+     */
     it('여러 사용자의 동시 트랜잭션이 독립적으로 처리되어야 한다', async () => {
       // given
       const user1 = 1;
@@ -360,6 +414,16 @@ describe('PointService 통합 테스트', () => {
       expect(user2Histories).toHaveLength(2);
     });
 
+    /**
+     * 테스트 목적: 실패한 트랜잭션의 원자성(Atomicity) 검증
+     * 테스트 시나리오: 잔액 부족으로 인한 포인트 사용 실패
+     * 검증 내용:
+     * - 예외 발생 시 데이터 변경 없음 (롤백)
+     * - 실패한 트랜잭션이 히스토리에 기록되지 않음
+     * - 기존 포인트 잔액 유지
+     * - All-or-Nothing 원칙 준수
+     * 데이터 무결성: 부분적 실행 방지, 일관된 상태 유지 보장
+     */
     it('잔액 부족 상황에서 트랜잭션이 실패해도 히스토리에 기록되지 않아야 한다', async () => {
       // given
       const userId = 1;
@@ -380,6 +444,16 @@ describe('PointService 통합 테스트', () => {
   });
 
   describe('동시성 제어 테스트', () => {
+    /**
+     * 테스트 목적: 동시성 제어 메커니즘의 실제 동작 검증
+     * 테스트 시나리오: 같은 사용자에 대한 3개의 동시 충전 요청
+     * 검증 내용:
+     * - Race Condition 방지 확인
+     * - 순차 처리를 통한 정확한 누적 계산
+     * - MemoryLockManager의 실제 동작 검증
+     * - 데이터 무결성 보장
+     * 통합 테스트 중요성: 실제 동시 요청 상황에서의 시스템 안정성 검증
+     */
     it('동시 충전 요청이 정상적으로 처리되어야 한다', async () => {
       const requestPromise = [
         service.chargePoint(1, 1000),
@@ -394,6 +468,16 @@ describe('PointService 통합 테스트', () => {
       expect(result.point).toBe(1800);
     });
 
+    /**
+     * 테스트 목적: 포인트 사용 시 동시성 제어 검증
+     * 테스트 시나리오: 충분한 잔액 준비 후 3개의 동시 사용 요청
+     * 검증 내용:
+     * - 잔액 차감의 정확성 (순차 처리)
+     * - 잔액 부족 방지 (마이너스 포인트 방지)
+     * - 동시 요청에도 안전한 잔액 관리
+     * - 최종 잔액의 정확성 검증
+     * 비즈니스 중요성: 금융 서비스에서 가장 중요한 동시성 이슈 해결 검증
+     */
     it('동시 사용 요청이 정상적으로 처리되어야 한다', async () => {
       await service.chargePoint(1, 10000);
 
@@ -408,6 +492,21 @@ describe('PointService 통합 테스트', () => {
       const result = await service.getUserPoint(1);
 
       expect(result.point).toBe(8200);
+    });
+
+    it('충전/사용 혼합 요청이 정상적으로 처리되어야 한다', async () => {
+      await service.chargePoint(1, 10000);
+
+      const requestPromise = [
+        service.usePoint(1, 1000),
+        service.chargePoint(1, 500),
+      ];
+
+      await Promise.all(requestPromise);
+
+      const result = await service.getUserPoint(1);
+
+      expect(result.point).toBe(9500);
     });
   });
 });
