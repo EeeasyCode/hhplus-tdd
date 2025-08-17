@@ -1,0 +1,381 @@
+import { BadRequestException } from '@nestjs/common';
+import { Test, TestingModule } from '@nestjs/testing';
+import { PointHistoryTable } from 'src/database/pointhistory.table';
+import { UserPointTable } from 'src/database/userpoint.table';
+import { TransactionType } from 'src/point/point.model';
+import { PointService } from 'src/point/point.service';
+
+describe('PointService 통합 테스트', () => {
+  let service: PointService;
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [PointService, UserPointTable, PointHistoryTable],
+    }).compile();
+
+    service = module.get<PointService>(PointService);
+  });
+
+  describe('getUserPoint', () => {
+    it('신규 사용자의 경우 0 포인트를 반환해야 한다', async () => {
+      // given
+      const userId = 1;
+
+      // when
+      const result = await service.getUserPoint(userId);
+
+      // then
+      expect(result.id).toBe(userId);
+      expect(result.point).toBe(0);
+      expect(result.updateMillis).toBeDefined();
+    });
+
+    it('포인트를 충전한 후 조회하면 충전된 포인트가 반환되어야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 1000;
+
+      // when: 서비스를 통해 포인트 충전
+      await service.chargePoint(userId, chargeAmount);
+      const result = await service.getUserPoint(userId);
+
+      // then
+      expect(result.id).toBe(userId);
+      expect(result.point).toBe(chargeAmount);
+    });
+  });
+
+  describe('chargePoint', () => {
+    it('유효한 금액으로 포인트를 충전해야 한다', async () => {
+      // given
+      const userId = 1;
+      const firstCharge = 1000;
+      const secondCharge = 500;
+
+      // when: 첫 번째 충전
+      const firstResult = await service.chargePoint(userId, firstCharge);
+
+      // then: 첫 번째 충전 확인
+      expect(firstResult.id).toBe(userId);
+      expect(firstResult.point).toBe(firstCharge);
+      expect(firstResult.updateMillis).toBeDefined();
+
+      // when: 두 번째 충전
+      const secondResult = await service.chargePoint(userId, secondCharge);
+
+      // then: 누적 충전 확인
+      expect(secondResult.point).toBe(firstCharge + secondCharge);
+
+      // 최종 포인트 조회로 검증
+      const finalPoint = await service.getUserPoint(userId);
+      expect(finalPoint.point).toBe(firstCharge + secondCharge);
+    });
+
+    it('충전 내역이 포인트 히스토리에 기록되어야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 500;
+
+      // when
+      await service.chargePoint(userId, chargeAmount);
+
+      // then
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(1);
+      expect(histories[0].userId).toBe(userId);
+      expect(histories[0].amount).toBe(chargeAmount);
+      expect(histories[0].type).toBe(TransactionType.CHARGE);
+    });
+
+    it('0 이하의 금액으로 충전 시 예외가 발생해야 한다', async () => {
+      // given
+      const userId = 1;
+      const invalidAmount = 0;
+
+      // when & then
+      await expect(service.chargePoint(userId, invalidAmount)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.chargePoint(userId, invalidAmount)).rejects.toThrow(
+        '충전 금액은 0보다 커야 합니다.',
+      );
+    });
+
+    it('음수 금액으로 충전 시 예외가 발생해야 한다', async () => {
+      // given
+      const userId = 1;
+      const negativeAmount = -100;
+
+      // when & then
+      await expect(service.chargePoint(userId, negativeAmount)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('연속적인 충전이 정확히 누적되어야 한다', async () => {
+      // given
+      const userId = 1;
+      const firstCharge = 500;
+      const secondCharge = 300;
+
+      // when
+      await service.chargePoint(userId, firstCharge);
+      const result = await service.chargePoint(userId, secondCharge);
+
+      // then
+      expect(result.point).toBe(firstCharge + secondCharge);
+
+      // 히스토리 확인
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(2);
+      expect(histories.every((h) => h.type === TransactionType.CHARGE)).toBe(
+        true,
+      );
+    });
+  });
+
+  describe('usePoint', () => {
+    it('충분한 포인트가 있을 때 포인트를 사용해야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 1000;
+      const useAmount = 300;
+      // 먼저 포인트 충전
+      await service.chargePoint(userId, chargeAmount);
+
+      // when
+      const result = await service.usePoint(userId, useAmount);
+
+      // then
+      expect(result.id).toBe(userId);
+      expect(result.point).toBe(chargeAmount - useAmount);
+      expect(result.updateMillis).toBeDefined();
+
+      // 최종 포인트 조회로 검증
+      const finalPoint = await service.getUserPoint(userId);
+      expect(finalPoint.point).toBe(chargeAmount - useAmount);
+    });
+
+    it('사용 내역이 포인트 히스토리에 기록되어야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 1000;
+      const useAmount = 300;
+      // 먼저 포인트 충전
+      await service.chargePoint(userId, chargeAmount);
+
+      // when
+      await service.usePoint(userId, useAmount);
+
+      // then
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(2); // 충전 + 사용
+      // 최신순 정렬이므로 사용 내역이 첫 번째
+      expect(histories[0].userId).toBe(userId);
+      expect(histories[0].amount).toBe(useAmount);
+      expect(histories[0].type).toBe(TransactionType.USE);
+      // 충전 내역이 두 번째
+      expect(histories[1].type).toBe(TransactionType.CHARGE);
+      expect(histories[1].amount).toBe(chargeAmount);
+    });
+
+    it('포인트가 부족할 때 예외가 발생해야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 100;
+      const useAmount = 500;
+      // 작은 금액만 충전
+      await service.chargePoint(userId, chargeAmount);
+
+      // when & then
+      await expect(service.usePoint(userId, useAmount)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.usePoint(userId, useAmount)).rejects.toThrow(
+        '포인트가 부족합니다.',
+      );
+    });
+
+    it('0 이하의 금액으로 사용 시 예외가 발생해야 한다', async () => {
+      // given
+      const userId = 1;
+      const invalidAmount = 0;
+
+      // when & then
+      await expect(service.usePoint(userId, invalidAmount)).rejects.toThrow(
+        BadRequestException,
+      );
+      await expect(service.usePoint(userId, invalidAmount)).rejects.toThrow(
+        '사용 금액은 0보다 커야 합니다.',
+      );
+    });
+
+    it('음수 금액으로 사용 시 예외가 발생해야 한다', async () => {
+      // given
+      const userId = 1;
+      const negativeAmount = -100;
+
+      // when & then
+      await expect(service.usePoint(userId, negativeAmount)).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('정확히 보유한 포인트만큼 사용할 수 있어야 한다', async () => {
+      // given
+      const userId = 1;
+      const chargeAmount = 1000;
+      // 포인트 충전
+      await service.chargePoint(userId, chargeAmount);
+
+      // when: 충전한 금액 전체를 사용
+      const result = await service.usePoint(userId, chargeAmount);
+
+      // then
+      expect(result.point).toBe(0);
+      // 최종 포인트 조회로 검증
+      const finalPoint = await service.getUserPoint(userId);
+      expect(finalPoint.point).toBe(0);
+    });
+  });
+
+  describe('getPointHistories', () => {
+    it('빈 히스토리 목록을 반환해야 한다', async () => {
+      // given
+      const userId = 1;
+
+      // when
+      const result = await service.getPointHistories(userId);
+
+      // then
+      expect(result).toEqual([]);
+    });
+
+    it('포인트 히스토리를 최신순으로 정렬하여 반환해야 한다', async () => {
+      // given
+      const userId = 1;
+
+      // when: 여러 트랜잭션 실행 (시간차를 두기 위해 비동기 처리)
+      await service.chargePoint(userId, 1000);
+      await new Promise((resolve) => setTimeout(resolve, 10)); // 시간차 보장
+      await service.usePoint(userId, 300);
+      await new Promise((resolve) => setTimeout(resolve, 10)); // 시간차 보장
+      await service.chargePoint(userId, 500);
+
+      // then
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(3);
+
+      // 최신순 정렬 확인 (timeMillis가 큰 순서)
+      for (let i = 0; i < histories.length - 1; i++) {
+        expect(histories[i].timeMillis).toBeGreaterThanOrEqual(
+          histories[i + 1].timeMillis,
+        );
+      }
+
+      // 트랜잭션 타입 순서 확인
+      expect(histories[0].type).toBe(TransactionType.CHARGE); // 마지막 충전
+      expect(histories[0].amount).toBe(500);
+      expect(histories[1].type).toBe(TransactionType.USE); // 사용
+      expect(histories[1].amount).toBe(300);
+      expect(histories[2].type).toBe(TransactionType.CHARGE); // 첫 번째 충전
+      expect(histories[2].amount).toBe(1000);
+    });
+
+    it('특정 사용자의 히스토리만 반환해야 한다', async () => {
+      // given
+      const userId1 = 1;
+      const userId2 = 2;
+
+      // when
+      await service.chargePoint(userId1, 1000);
+      await service.chargePoint(userId2, 2000);
+      await service.usePoint(userId1, 300);
+
+      // then
+      const user1Histories = await service.getPointHistories(userId1);
+      const user2Histories = await service.getPointHistories(userId2);
+
+      expect(user1Histories).toHaveLength(2);
+      expect(user2Histories).toHaveLength(1);
+
+      expect(user1Histories.every((h) => h.userId === userId1)).toBe(true);
+      expect(user2Histories.every((h) => h.userId === userId2)).toBe(true);
+    });
+  });
+
+  describe('사용자 시나리오 테스트', () => {
+    it('충전 -> 사용 -> 재충전 시나리오가 정상 동작해야 한다', async () => {
+      // given
+      const userId = 1;
+
+      // when: 시나리오 실행
+      // 1. 1000 포인트 충전
+      const chargeResult1 = await service.chargePoint(userId, 1000);
+      expect(chargeResult1.point).toBe(1000);
+
+      // 2. 300 포인트 사용
+      const useResult = await service.usePoint(userId, 300);
+      expect(useResult.point).toBe(700);
+
+      // 3. 500 포인트 재충전
+      const chargeResult2 = await service.chargePoint(userId, 500);
+      expect(chargeResult2.point).toBe(1200);
+
+      // then: 최종 상태 확인
+      const finalPoint = await service.getUserPoint(userId);
+      expect(finalPoint.point).toBe(1200);
+
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(3);
+    });
+
+    it('여러 사용자의 동시 트랜잭션이 독립적으로 처리되어야 한다', async () => {
+      // given
+      const user1 = 1;
+      const user2 = 2;
+
+      // when: 동시 트랜잭션
+      await Promise.all([
+        service.chargePoint(user1, 1000),
+        service.chargePoint(user2, 2000),
+      ]);
+
+      await Promise.all([
+        service.usePoint(user1, 300),
+        service.usePoint(user2, 500),
+      ]);
+
+      // then: 각 사용자별 독립적 처리 확인
+      const user1Point = await service.getUserPoint(user1);
+      const user2Point = await service.getUserPoint(user2);
+
+      expect(user1Point.point).toBe(700);
+      expect(user2Point.point).toBe(1500);
+
+      const user1Histories = await service.getPointHistories(user1);
+      const user2Histories = await service.getPointHistories(user2);
+
+      expect(user1Histories).toHaveLength(2);
+      expect(user2Histories).toHaveLength(2);
+    });
+
+    it('잔액 부족 상황에서 트랜잭션이 실패해도 히스토리에 기록되지 않아야 한다', async () => {
+      // given
+      const userId = 1;
+      await service.chargePoint(userId, 100);
+
+      // when: 잔액 부족으로 실패하는 사용 시도
+      await expect(service.usePoint(userId, 500)).rejects.toThrow();
+
+      // then: 실패한 트랜잭션은 히스토리에 기록되지 않음
+      const histories = await service.getPointHistories(userId);
+      expect(histories).toHaveLength(1); // 충전 내역만 존재
+      expect(histories[0].type).toBe(TransactionType.CHARGE);
+
+      // 포인트도 변경되지 않음
+      const currentPoint = await service.getUserPoint(userId);
+      expect(currentPoint.point).toBe(100);
+    });
+  });
+});
