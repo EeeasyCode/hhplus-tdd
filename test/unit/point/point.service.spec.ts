@@ -1,5 +1,7 @@
 import {
   anyNumber,
+  anyString,
+  anything,
   instance,
   mock,
   reset,
@@ -11,25 +13,35 @@ import { PointHistoryTable } from 'src/database/pointhistory.table';
 import { UserPointTable } from 'src/database/userpoint.table';
 import { TransactionType } from 'src/point/point.model';
 import { PointService } from 'src/point/point.service';
+import { MemoryLockManager } from 'src/utils/memory-lock.manager';
 
 describe('PointService', () => {
   let pointService: PointService;
   let mockUserPointTable: UserPointTable;
   let mockPointHistoryTable: PointHistoryTable;
+  let mockMemoryLockManager: MemoryLockManager;
 
   beforeEach(() => {
     mockUserPointTable = mock(UserPointTable);
     mockPointHistoryTable = mock(PointHistoryTable);
+    mockMemoryLockManager = mock(MemoryLockManager);
+
+    // MemoryLockManager의 withLock 메서드 Mock 설정
+    when(mockMemoryLockManager.withLock(anyString(), anything())).thenCall(
+      (key: string, operation: () => Promise<any>) => operation(),
+    );
 
     pointService = new PointService(
       instance(mockUserPointTable),
       instance(mockPointHistoryTable),
+      instance(mockMemoryLockManager),
     );
   });
 
   afterEach(() => {
     reset(mockUserPointTable);
     reset(mockPointHistoryTable);
+    reset(mockMemoryLockManager);
   });
 
   describe('getUserPoint', () => {
